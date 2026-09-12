@@ -160,6 +160,9 @@ internal static class McpServer
         AddOptional(result, arguments, "window", "--window");
         AddOptional(result, arguments, "cwd", "--cwd");
         AddOptional(result, arguments, "title", "--title");
+        AddOptional(result, arguments, "profile", "--profile");
+        AddOptional(result, arguments, "condaEnv", "--conda-env");
+        AddOptional(result, arguments, "distro", "--distro");
 
         if (OptionalBoolean(arguments, "maximized")) result.Add("--maximized");
         if (action == "split-pane")
@@ -208,12 +211,20 @@ internal static class McpServer
                 result.Add("--shell");
                 result.Add(RequiredString(arguments, "command"));
                 break;
+            case "cmd":
+                result.Add("--cmd");
+                result.Add(RequiredString(arguments, "command"));
+                break;
             case "wsl":
                 result.Add("--wsl");
                 result.Add(RequiredString(arguments, "command"));
                 break;
+            case "session":
+                result.Add("--command");
+                result.Add(RequiredString(arguments, "command"));
+                break;
             default:
-                throw new McpProtocolException(-32602, "mode must be direct, powershell, or wsl");
+                throw new McpProtocolException(-32602, "mode must be direct, session, powershell, cmd, or wsl");
         }
 
         return result.ToArray();
@@ -248,7 +259,7 @@ internal static class McpServer
         {
             name = "agent_terminal_open",
             title = "Open AgentTerminal Surface",
-            description = "Create a visible AgentTerminal window, tab, or split pane. Every live session name must be unique.",
+            description = "Create a visible AgentTerminal window, tab, or split pane with a PowerShell, CMD, WSL, or Conda profile. Every live session name must be unique.",
             inputSchema = new
             {
                 type = "object",
@@ -259,6 +270,9 @@ internal static class McpServer
                     window = new { type = "string", description = "Named Windows Terminal window group." },
                     cwd = new { type = "string", description = "Existing Windows working-directory path." },
                     title = new { type = "string", description = "Optional visible tab title." },
+                    profile = new { type = "string", @enum = new[] { "powershell", "cmd", "wsl", "conda" }, description = "Execution profile used by mode=session commands." },
+                    condaEnv = new { type = "string", description = "Conda environment name; valid only for the conda profile. Defaults to base." },
+                    distro = new { type = "string", description = "WSL distribution name; valid only for the wsl profile." },
                     orientation = new { type = "string", @enum = new[] { "horizontal", "vertical" } },
                     size = new { type = "number", exclusiveMinimum = 0.05, exclusiveMaximum = 0.95 },
                     maximized = new { type = "boolean" },
@@ -272,17 +286,17 @@ internal static class McpServer
         {
             name = "agent_terminal_run",
             title = "Run Visible Command",
-            description = "Run a command in a named visible AgentTerminal session. This can perform arbitrary actions as the current user; obtain approval when consequential.",
+            description = "Run a command in a named visible AgentTerminal session, using its declared profile or an explicit override. This can perform arbitrary actions as the current user; obtain approval when consequential.",
             inputSchema = new
             {
                 type = "object",
                 properties = new
                 {
                     session = new { type = "string" },
-                    mode = new { type = "string", @enum = new[] { "direct", "powershell", "wsl" } },
+                    mode = new { type = "string", @enum = new[] { "direct", "session", "powershell", "cmd", "wsl" } },
                     program = new { type = "string", description = "Executable for direct mode." },
                     arguments = new { type = "array", items = new { type = "string" }, description = "Argument list for direct mode." },
-                    command = new { type = "string", description = "One command string for powershell or wsl mode." },
+                    command = new { type = "string", description = "One command string for session, powershell, cmd, or wsl mode." },
                     cwd = new { type = "string", description = "Optional existing Windows working-directory path." },
                 },
                 required = new[] { "session", "mode" },

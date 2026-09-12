@@ -24,8 +24,8 @@ The server supports protocol versions `2024-11-05`, `2025-03-26`, `2025-06-18`, 
 
 | Tool | Purpose |
 | --- | --- |
-| `agent_terminal_open` | Create a window, tab, or split pane |
-| `agent_terminal_run` | Run a direct, PowerShell, or WSL command |
+| `agent_terminal_open` | Create a profiled window, tab, or split pane |
+| `agent_terminal_run` | Run through the session profile or an explicit execution mode |
 | `agent_terminal_ping` | Check whether a session is reachable |
 | `agent_terminal_stop` | Stop one session |
 
@@ -106,7 +106,9 @@ Place `--json` before the ordinary command:
 AgentTerminal.exe --json ping --name shell
 AgentTerminal.exe --json run --name shell -- dotnet --version
 AgentTerminal.exe --json run --name shell --shell 'git status --short'
+AgentTerminal.exe --json run --name dos --cmd 'dir /b'
 AgentTerminal.exe --json run --name linux --wsl 'uname -a'
+AgentTerminal.exe --json run --name ml --command 'python --version'
 ```
 
 Successful ping result:
@@ -144,6 +146,9 @@ document rather than inferring success from text.
 | `window` | `--window` |
 | `cwd` | `--cwd` |
 | `title` | `--title` |
+| `profile` | `--profile powershell|cmd|wsl|conda` |
+| `condaEnv` | `--conda-env`; only valid for `conda` |
+| `distro` | `--distro`; only valid for `wsl` |
 | `orientation` | `--horizontal` or `--vertical` |
 | `size` | `--size` |
 | `maximized` | `--maximized` when true |
@@ -151,9 +156,16 @@ document rather than inferring success from text.
 ### `agent_terminal_run`
 
 - `mode: direct` requires `program`; `arguments` is an optional string array.
+- `mode: session` requires `command` and uses the profile declared when the session was
+  created. This is the preferred mode for profiled sessions.
 - `mode: powershell` requires `command` and maps to `--shell`.
+- `mode: cmd` requires `command` and maps to `--cmd`.
 - `mode: wsl` requires `command` and maps to `--wsl`.
 - `cwd` is always an optional Windows host path.
+
+Available session profiles are `powershell`, `cmd`, `wsl`, and `conda`. Profile names,
+the selected Conda environment, and the selected WSL distribution are returned by
+structured `ping` calls so an agent can verify a destination before routing work to it.
 
 ## Hermes Agent
 

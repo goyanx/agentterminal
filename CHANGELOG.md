@@ -2,6 +2,21 @@
 
 All notable changes to AgentTerminal are documented in this file.
 
+## [0.4.0] - 2026-09-12
+
+### Added
+
+- Per-session `powershell`, `cmd`, `wsl`, and `conda` execution profiles.
+- Conda environment and WSL distribution selection when creating a session.
+- Profile-aware `--command` CLI execution and MCP `mode: session` calls.
+- Explicit Command Prompt execution through `--cmd` and MCP `mode: cmd`.
+- Profile metadata in structured ping results so callers can verify destinations.
+
+### Design
+
+- Profile commands use clean child processes rather than leaking shell state between
+  agent calls, preserving reliable output boundaries and exit codes.
+
 ## [0.3.0] - 2026-09-12
 
 ### Added

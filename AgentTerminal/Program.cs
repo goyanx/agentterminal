@@ -26,6 +26,7 @@ internal static class AgentTerminalApp
 {
     private const string DefaultName = "main";
     private const string DefaultWindow = "main";
+    private const string DefaultProfile = "powershell";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     internal static bool JsonOutput { get; private set; }
 
@@ -67,7 +68,12 @@ internal static class AgentTerminalApp
         string name = ValidateName(options.Value("name") ?? DefaultName);
         string window = ValidateName(options.Value("window") ?? (kind == SurfaceKind.Window ? name : DefaultWindow));
         string cwd = Path.GetFullPath(options.Value("cwd") ?? Environment.CurrentDirectory);
-        string title = options.Value("title") ?? $"Agent Terminal · {name}";
+        string profile = ValidateProfile(options.Value("profile") ?? DefaultProfile);
+        string? condaEnv = options.Value("conda-env");
+        string? distro = options.Value("distro");
+        ValidateProfileOptions(profile, condaEnv, distro);
+        condaEnv = profile == "conda" ? condaEnv ?? "base" : null;
+        string title = options.Value("title") ?? $"Agent Terminal · {name} · {ProfileLabel(profile, condaEnv, distro)}";
 
         if (!Directory.Exists(cwd))
             throw new DirectoryNotFoundException($"Working directory does not exist: {cwd}");
@@ -121,6 +127,18 @@ internal static class AgentTerminalApp
         startInfo.ArgumentList.Add(cwd);
         startInfo.ArgumentList.Add("--window");
         startInfo.ArgumentList.Add(window);
+        startInfo.ArgumentList.Add("--profile");
+        startInfo.ArgumentList.Add(profile);
+        if (condaEnv is not null)
+        {
+            startInfo.ArgumentList.Add("--conda-env");
+            startInfo.ArgumentList.Add(condaEnv);
+        }
+        if (distro is not null)
+        {
+            startInfo.ArgumentList.Add("--distro");
+            startInfo.ArgumentList.Add(distro);
+        }
 
         Process.Start(startInfo);
 
@@ -134,7 +152,7 @@ internal static class AgentTerminalApp
                     SurfaceKind.Tab => "tab",
                     _ => "pane",
                 };
-                WriteResult(new { ok = true, action = "open", surface, session = name, window, cwd });
+                WriteResult(new { ok = true, action = "open", surface, session = name, window, cwd, profile, condaEnv, distro });
                 return 0;
             }
             await Task.Delay(100);
@@ -149,10 +167,15 @@ internal static class AgentTerminalApp
         string name = ValidateName(options.Value("name") ?? DefaultName);
         string window = ValidateName(options.Value("window") ?? name);
         string cwd = Path.GetFullPath(options.Value("cwd") ?? Environment.CurrentDirectory);
+        string profile = ValidateProfile(options.Value("profile") ?? DefaultProfile);
+        string? condaEnv = options.Value("conda-env");
+        string? distro = options.Value("distro");
+        ValidateProfileOptions(profile, condaEnv, distro);
+        condaEnv = profile == "conda" ? condaEnv ?? "base" : null;
         Directory.SetCurrentDirectory(cwd);
-        Console.Title = $"Agent Terminal · {name}";
+        Console.Title = $"Agent Terminal · {name} · {ProfileLabel(profile, condaEnv, distro)}";
 
-        WriteBanner(name, window, cwd);
+        WriteBanner(name, window, cwd, profile, condaEnv, distro);
         using var shutdown = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
         {
@@ -166,7 +189,7 @@ internal static class AgentTerminalApp
             try
             {
                 await pipe.WaitForConnectionAsync(shutdown.Token);
-                bool shouldStop = await HandleConnectionAsync(pipe, name, cwd, shutdown.Token);
+                bool shouldStop = await HandleConnectionAsync(pipe, name, cwd, profile, condaEnv, distro, shutdown.Token);
                 if (shouldStop) break;
             }
             catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
@@ -183,7 +206,8 @@ internal static class AgentTerminalApp
         return 0;
     }
 
-    private static async Task<bool> HandleConnectionAsync(Stream pipe, string name, string hostCwd, CancellationToken cancellationToken)
+    private static async Task<bool> HandleConnectionAsync(Stream pipe, string name, string hostCwd, string profile,
+        string? condaEnv, string? distro, CancellationToken cancellationToken)
     {
         using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
@@ -196,13 +220,13 @@ internal static class AgentTerminalApp
         switch (request.Action)
         {
             case "ping":
-                await SendAsync(writer, new Response("pong", Message: name), cancellationToken);
+                await SendAsync(writer, new Response("pong", Message: name, Profile: profile, CondaEnv: condaEnv, Distro: distro), cancellationToken);
                 return false;
             case "stop":
                 await SendAsync(writer, new Response("result", ExitCode: 0), cancellationToken);
                 return true;
             case "run":
-                await ExecuteAsync(request, writer, hostCwd, cancellationToken);
+                await ExecuteAsync(request, writer, hostCwd, profile, condaEnv, distro, cancellationToken);
                 return false;
             default:
                 await SendAsync(writer, new Response("error", Message: $"Unknown action '{request.Action}'."), cancellationToken);
@@ -210,7 +234,8 @@ internal static class AgentTerminalApp
         }
     }
 
-    private static async Task ExecuteAsync(Request request, StreamWriter writer, string hostCwd, CancellationToken cancellationToken)
+    private static async Task ExecuteAsync(Request request, StreamWriter writer, string hostCwd, string profile,
+        string? condaEnv, string? distro, CancellationToken cancellationToken)
     {
         if (request.Command is not { Length: > 0 })
         {
@@ -225,8 +250,9 @@ internal static class AgentTerminalApp
             return;
         }
 
-        string display = request.Shell || request.Wsl
-            ? $"{(request.Wsl ? "[WSL] " : string.Empty)}{request.Command[0]}"
+        string mode = request.Mode == "session" ? profile : request.Mode ?? "direct";
+        string display = mode != "direct"
+            ? $"[{ProfileLabel(mode, condaEnv, distro)}] {request.Command[0]}"
             : string.Join(" ", request.Command.Select(QuoteForDisplay));
 
         Console.ForegroundColor = ConsoleColor.Cyan;
@@ -245,17 +271,44 @@ internal static class AgentTerminalApp
             CreateNoWindow = true,
         };
 
-        if (request.Wsl)
+        if (mode == "wsl")
         {
             startInfo.FileName = "wsl.exe";
+            if (distro is not null)
+            {
+                startInfo.ArgumentList.Add("--distribution");
+                startInfo.ArgumentList.Add(distro);
+            }
             startInfo.ArgumentList.Add("--");
             startInfo.ArgumentList.Add("bash");
             startInfo.ArgumentList.Add("-lc");
             startInfo.ArgumentList.Add(request.Command[0]);
         }
-        else if (request.Shell)
+        else if (mode == "powershell")
         {
             startInfo.FileName = FindPowerShell();
+            startInfo.ArgumentList.Add("-NoLogo");
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(request.Command[0]);
+        }
+        else if (mode == "cmd")
+        {
+            startInfo.FileName = "cmd.exe";
+            startInfo.ArgumentList.Add("/d");
+            startInfo.ArgumentList.Add("/s");
+            startInfo.ArgumentList.Add("/c");
+            startInfo.ArgumentList.Add(request.Command[0]);
+        }
+        else if (mode == "conda")
+        {
+            startInfo.FileName = FindConda();
+            startInfo.ArgumentList.Add("run");
+            startInfo.ArgumentList.Add("--no-capture-output");
+            startInfo.ArgumentList.Add("--name");
+            startInfo.ArgumentList.Add(condaEnv ?? "base");
+            startInfo.ArgumentList.Add(FindPowerShell());
             startInfo.ArgumentList.Add("-NoLogo");
             startInfo.ArgumentList.Add("-NoProfile");
             startInfo.ArgumentList.Add("-NonInteractive");
@@ -315,7 +368,7 @@ internal static class AgentTerminalApp
     {
         var parsed = ParseRun(args);
         string name = ValidateName(parsed.Name ?? DefaultName);
-        var request = new Request("run", parsed.Command, parsed.Cwd, parsed.Shell, parsed.Wsl);
+        var request = new Request("run", parsed.Command, parsed.Cwd, parsed.Mode);
         return await SendRequestAsync(name, request, echoOutput: !JsonOutput);
     }
 
@@ -364,7 +417,16 @@ internal static class AgentTerminalApp
                     stderr.Append(response.Data);
                     break;
                 case "pong":
-                    WriteResult(new { ok = true, action = "ping", session = response.Message, reachable = true });
+                    WriteResult(new
+                    {
+                        ok = true,
+                        action = "ping",
+                        session = response.Message,
+                        reachable = true,
+                        profile = response.Profile,
+                        condaEnv = response.CondaEnv,
+                        distro = response.Distro,
+                    });
                     return 0;
                 case "result":
                     if (JsonOutput)
@@ -436,6 +498,56 @@ internal static class AgentTerminalApp
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe")
             : "powershell.exe";
 
+    private static string FindConda()
+    {
+        string? configured = Environment.GetEnvironmentVariable("CONDA_EXE");
+        if (configured is not null && File.Exists(configured)) return configured;
+
+        string user = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string common = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+        foreach (string candidate in new[]
+        {
+            Path.Combine(user, "anaconda3", "Scripts", "conda.exe"),
+            Path.Combine(user, "miniconda3", "Scripts", "conda.exe"),
+            Path.Combine(common, "anaconda3", "Scripts", "conda.exe"),
+            Path.Combine(common, "miniconda3", "Scripts", "conda.exe"),
+        })
+        {
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return "conda.exe";
+    }
+
+    private static string ValidateProfile(string profile)
+    {
+        string normalized = profile.ToLowerInvariant();
+        if (normalized is not ("powershell" or "cmd" or "wsl" or "conda"))
+            throw new ArgumentException("--profile must be powershell, cmd, wsl, or conda.");
+        return normalized;
+    }
+
+    private static void ValidateProfileOptions(string profile, string? condaEnv, string? distro)
+    {
+        if (condaEnv is not null && profile != "conda")
+            throw new ArgumentException("--conda-env is only valid with --profile conda.");
+        if (distro is not null && profile != "wsl")
+            throw new ArgumentException("--distro is only valid with --profile wsl.");
+        if (condaEnv is not null && string.IsNullOrWhiteSpace(condaEnv))
+            throw new ArgumentException("--conda-env must not be empty.");
+        if (distro is not null && string.IsNullOrWhiteSpace(distro))
+            throw new ArgumentException("--distro must not be empty.");
+    }
+
+    private static string ProfileLabel(string profile, string? condaEnv, string? distro) => profile switch
+    {
+        "powershell" => "PowerShell",
+        "cmd" => "Command Prompt",
+        "wsl" => distro is null ? "WSL" : $"WSL · {distro}",
+        "conda" => $"Conda · {condaEnv ?? "base"}",
+        _ => profile,
+    };
+
     internal static IReadOnlyList<string> CurrentLaunchCommand()
     {
         string processPath = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine current executable path.");
@@ -465,8 +577,7 @@ internal static class AgentTerminalApp
     {
         string? name = null;
         string? cwd = null;
-        bool shell = false;
-        bool wsl = false;
+        string mode = "direct";
         var command = new List<string>();
         for (int i = 0; i < args.Length; i++)
         {
@@ -477,18 +588,34 @@ internal static class AgentTerminalApp
             }
             if (args[i] == "--shell")
             {
-                shell = true;
+                mode = "powershell";
                 if (++i >= args.Length) throw new ArgumentException("Missing command after --shell.");
                 command.Add(args[i]);
                 if (i + 1 != args.Length) throw new ArgumentException("--shell accepts one quoted command string.");
                 break;
             }
+            if (args[i] == "--cmd")
+            {
+                mode = "cmd";
+                if (++i >= args.Length) throw new ArgumentException("Missing command after --cmd.");
+                command.Add(args[i]);
+                if (i + 1 != args.Length) throw new ArgumentException("--cmd accepts one quoted command string.");
+                break;
+            }
             if (args[i] == "--wsl")
             {
-                wsl = true;
+                mode = "wsl";
                 if (++i >= args.Length) throw new ArgumentException("Missing Linux command after --wsl.");
                 command.Add(args[i]);
                 if (i + 1 != args.Length) throw new ArgumentException("--wsl accepts one quoted command string.");
+                break;
+            }
+            if (args[i] == "--command")
+            {
+                mode = "session";
+                if (++i >= args.Length) throw new ArgumentException("Missing command after --command.");
+                command.Add(args[i]);
+                if (i + 1 != args.Length) throw new ArgumentException("--command accepts one quoted command string.");
                 break;
             }
             if (args[i] is "--name" or "--cwd")
@@ -501,10 +628,10 @@ internal static class AgentTerminalApp
             throw new ArgumentException($"Unexpected argument '{args[i]}'. Put direct commands after --.");
         }
         if (command.Count == 0) throw new ArgumentException("No command supplied. Use: run [options] -- <program> [arguments]");
-        return new RunOptions(name, cwd, shell, wsl, command.ToArray());
+        return new RunOptions(name, cwd, mode, command.ToArray());
     }
 
-    private static void WriteBanner(string name, string window, string cwd)
+    private static void WriteBanner(string name, string window, string cwd, string profile, string? condaEnv, string? distro)
     {
         Console.ForegroundColor = ConsoleColor.Cyan;
         Console.WriteLine("┌──────────────────────────────────────────────────────────────┐");
@@ -513,8 +640,9 @@ internal static class AgentTerminalApp
         Console.ResetColor();
         Console.WriteLine($"Session : {name}");
         Console.WriteLine($"Window  : {window}");
+        Console.WriteLine($"Profile : {ProfileLabel(profile, condaEnv, distro)}");
         Console.WriteLine($"Folder  : {cwd}");
-        Console.WriteLine("Status  : waiting for an agent command (Ctrl+C closes host)");
+        Console.WriteLine("Status  : waiting for an agent command (use run --command; Ctrl+C closes host)");
     }
 
     private static void PrintHelp() => Console.WriteLine("""
@@ -523,22 +651,26 @@ internal static class AgentTerminalApp
         Usage:
           agent-terminal --json COMMAND [OPTIONS]
           agent-terminal mcp
-          agent-terminal start      [--window WINDOW] [--name NAME] [--cwd PATH] [--title TITLE] [--maximized]
-          agent-terminal new-window [--window WINDOW] [--name NAME] [--cwd PATH] [--title TITLE] [--maximized]
-          agent-terminal new-tab    [--window WINDOW] --name NAME [--cwd PATH] [--title TITLE]
-          agent-terminal split-pane [--window WINDOW] --name NAME [--cwd PATH] [--title TITLE]
+          agent-terminal start      [--window WINDOW] [--name NAME] [--cwd PATH] [--title TITLE] [--profile PROFILE] [--maximized]
+          agent-terminal new-window [--window WINDOW] [--name NAME] [--cwd PATH] [--title TITLE] [--profile PROFILE] [--maximized]
+          agent-terminal new-tab    [--window WINDOW] --name NAME [--cwd PATH] [--title TITLE] [--profile PROFILE]
+          agent-terminal split-pane [--window WINDOW] --name NAME [--cwd PATH] [--title TITLE] [--profile PROFILE]
                                       [--horizontal|--vertical] [--size 0.05-0.95]
+                                      [--conda-env ENV] [--distro DISTRO]
           agent-terminal run   [--name NAME] [--cwd PATH] -- PROGRAM [ARGUMENTS...]
+          agent-terminal run   [--name NAME] [--cwd PATH] --command "SESSION-PROFILE COMMAND"
           agent-terminal run   [--name NAME] [--cwd PATH] --shell "POWERSHELL COMMAND"
+          agent-terminal run   [--name NAME] [--cwd PATH] --cmd "CMD COMMAND"
           agent-terminal run   [--name NAME] [--cwd PATH] --wsl "LINUX COMMAND"
           agent-terminal ping  [--name NAME]
           agent-terminal stop  [--name NAME]
 
         Examples:
-          agent-terminal new-window --window work --name shell --cwd C:\src\my-app
-          agent-terminal new-tab --window work --name tests --cwd C:\src\my-app
-          agent-terminal split-pane --window work --name server --vertical --size 0.4
+          agent-terminal new-window --window work --name shell --profile powershell --cwd C:\src\my-app
+          agent-terminal new-tab --window work --name linux --profile wsl --distro Ubuntu-22.04
+          agent-terminal split-pane --window work --name ml --profile conda --conda-env base --vertical --size 0.4
           agent-terminal run --name tests -- dotnet test
+          agent-terminal run --name ml --command "python --version"
           agent-terminal run --name shell --shell "dotnet build; git status --short"
           agent-terminal run --name hermes --wsl "uname -a && git status --short"
 
@@ -571,9 +703,10 @@ internal static class AgentTerminalApp
         else Console.Error.WriteLine($"agent-terminal: {message}");
     }
 
-    private sealed record Request(string Action, string[]? Command = null, string? Cwd = null, bool Shell = false, bool Wsl = false);
-    private sealed record Response(string Type, string? Data = null, int? ExitCode = null, string? Message = null);
-    private sealed record RunOptions(string? Name, string? Cwd, bool Shell, bool Wsl, string[] Command);
+    private sealed record Request(string Action, string[]? Command = null, string? Cwd = null, string? Mode = null);
+    private sealed record Response(string Type, string? Data = null, int? ExitCode = null, string? Message = null,
+        string? Profile = null, string? CondaEnv = null, string? Distro = null);
+    private sealed record RunOptions(string? Name, string? Cwd, string Mode, string[] Command);
     private sealed record ParsedOptions(Dictionary<string, string?> Values)
     {
         public string? Value(string key) => Values.GetValueOrDefault(key);

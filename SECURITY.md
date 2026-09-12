@@ -9,8 +9,8 @@ not isolation.
 - The control channel is a Windows named pipe restricted to the current user.
 - The MCP server uses local stdio and does not listen on a network port.
 - No credentials are required, stored, or transmitted by AgentTerminal.
-- Direct execution avoids a command shell; PowerShell and WSL modes intentionally
-  interpret shell code.
+- Direct execution avoids a command shell; PowerShell, CMD, WSL, and Conda profile
+  commands intentionally interpret shell code.
 - MCP clients and function-tool hosts are responsible for user approval and policy.
 
 Only connect trusted local clients. Do not place an unauthenticated HTTP, WebSocket,

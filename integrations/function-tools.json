@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "description": "Provider-neutral function tool definitions for AgentTerminal 0.3.x.",
+  "description": "Provider-neutral function tool definitions for AgentTerminal 0.4.x.",
   "tools": [
     {
       "name": "agent_terminal_open",
-      "description": "Create a visible AgentTerminal window, tab, or split pane. Every live session name must be unique.",
+      "description": "Create a visible AgentTerminal window, tab, or split pane with a PowerShell, CMD, WSL, or Conda profile. Every live session name must be unique.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -28,6 +28,19 @@
             "type": "string",
             "description": "Optional visible tab title."
           },
+          "profile": {
+            "type": "string",
+            "enum": ["powershell", "cmd", "wsl", "conda"],
+            "description": "Execution profile used by session-mode commands."
+          },
+          "condaEnv": {
+            "type": "string",
+            "description": "Conda environment name; valid only for the conda profile. Defaults to base."
+          },
+          "distro": {
+            "type": "string",
+            "description": "WSL distribution name; valid only for the wsl profile."
+          },
           "orientation": {
             "type": "string",
             "enum": ["horizontal", "vertical"]
@@ -47,7 +60,7 @@
     },
     {
       "name": "agent_terminal_run",
-      "description": "Run a command in a named visible AgentTerminal session. This can perform arbitrary actions as the current user; obtain approval when consequential.",
+      "description": "Run a command in a named visible AgentTerminal session, using its declared profile or an explicit override. This can perform arbitrary actions as the current user; obtain approval when consequential.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -56,7 +69,7 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["direct", "powershell", "wsl"]
+            "enum": ["direct", "session", "powershell", "cmd", "wsl"]
           },
           "program": {
             "type": "string",
@@ -69,7 +82,7 @@
           },
           "command": {
             "type": "string",
-            "description": "One command string for powershell or wsl mode."
+            "description": "One command string for session, powershell, cmd, or wsl mode."
           },
           "cwd": {
             "type": "string",

@@ -23,8 +23,8 @@ instead of implementing another terminal emulator.
 - Tabs and split panes created on demand
 - Independently addressable sessions for every tab or pane
 - Direct Windows process execution without shell interpolation
-- PowerShell mode for pipelines, variables, redirects, and compound commands
-- WSL mode for Linux commands
+- Per-session PowerShell, Command Prompt, WSL, and Conda profiles
+- PowerShell, CMD, and WSL override modes for one-off commands
 - Live output mirrored to both the visible terminal and calling agent
 - Original command exit codes returned to the caller
 - Local named-pipe transport restricted to the current Windows user
@@ -49,6 +49,7 @@ To run AgentTerminal:
   `wt.exe` app execution alias enabled
 - .NET 8 Runtime for the default framework-dependent build
 - WSL only if `--wsl` execution is required
+- Conda only if a `conda` profile is required
 
 To build AgentTerminal, install the .NET 8 SDK or newer.
 
@@ -78,7 +79,7 @@ From the repository root:
 $at = (Resolve-Path .\dist\AgentTerminal.exe).Path
 
 # Create a visible Windows Terminal window and its first controlled session.
-& $at new-window --window work --name shell --cwd 'C:\path\to\your\repo'
+& $at new-window --window work --name shell --profile powershell --cwd 'C:\path\to\your\repo'
 
 # Confirm that the session control channel is reachable.
 & $at ping --name shell
@@ -119,6 +120,35 @@ Agents send later `run`, `ping`, and `stop` commands to the session name.
 creates a window when the specified window group does not exist. To guarantee a separate
 physical window, use a new unique `--window` name.
 
+## Session profiles
+
+Each visible session has one predictable execution profile. Commands submitted with
+`--command` run through that profile:
+
+| Profile | Command host | Profile option |
+| --- | --- | --- |
+| `powershell` | PowerShell 7, falling back to Windows PowerShell | Default |
+| `cmd` | `cmd.exe /d /s /c` | DOS/Windows command syntax |
+| `wsl` | `wsl.exe` and Bash | Optional `--distro NAME` |
+| `conda` | PowerShell inside `conda run` | Optional `--conda-env NAME`, default `base` |
+
+```powershell
+& $at new-window --window work --name ps --profile powershell --cwd 'C:\src\app'
+& $at new-tab --window work --name dos --profile cmd --cwd 'C:\src\app'
+& $at new-tab --window work --name linux --profile wsl --distro Ubuntu-22.04 --cwd 'C:\src\app'
+& $at new-tab --window work --name ml --profile conda --conda-env diffusion --cwd 'C:\src\app'
+
+& $at run --name ps --command '$PSVersionTable.PSVersion'
+& $at run --name dos --command 'dir /b'
+& $at run --name linux --command 'uname -a'
+& $at run --name ml --command 'python --version'
+```
+
+Profiles are intentionally stateless between submissions. Every command gets a clean
+child process, reliable output boundaries, and an exact exit code. Use `--cwd`, a Conda
+environment, or an explicit command when state is needed; shell variables and `cd`
+changes do not carry into the next command.
+
 ## Command execution modes
 
 ### Direct Windows execution
@@ -146,6 +176,15 @@ Windows PowerShell.
 
 Shell input is interpreted as PowerShell code. Do not pass untrusted text into this mode.
 
+### Command Prompt execution
+
+Use `--cmd` for a one-off command using Command Prompt syntax, regardless of the
+session's profile:
+
+```powershell
+& $at run --name shell --cmd 'dir /b && echo complete'
+```
+
 ### WSL execution
 
 Use `--wsl` with one quoted Linux shell command. AgentTerminal invokes the default WSL
@@ -169,17 +208,21 @@ the quoted `--wsl` command. Working-directory changes do not persist between sub
 
 ```text
 agent-terminal start      [--window WINDOW] [--name NAME] [--cwd PATH]
-                           [--title TITLE] [--maximized]
+                           [--title TITLE] [--profile PROFILE] [--maximized]
 agent-terminal new-window [--window WINDOW] [--name NAME] [--cwd PATH]
-                           [--title TITLE] [--maximized]
+                           [--title TITLE] [--profile PROFILE] [--maximized]
 agent-terminal new-tab    [--window WINDOW] --name NAME [--cwd PATH]
-                           [--title TITLE]
+                           [--title TITLE] [--profile PROFILE]
 agent-terminal split-pane [--window WINDOW] --name NAME [--cwd PATH]
-                           [--title TITLE] [--horizontal|--vertical]
+                           [--title TITLE] [--profile PROFILE]
+                           [--conda-env ENV] [--distro DISTRO]
+                           [--horizontal|--vertical]
                            [--size 0.05-0.95]
 
 agent-terminal run [--name NAME] [--cwd PATH] -- PROGRAM [ARGUMENTS...]
+agent-terminal run [--name NAME] [--cwd PATH] --command "PROFILE COMMAND"
 agent-terminal run [--name NAME] [--cwd PATH] --shell "POWERSHELL COMMAND"
+agent-terminal run [--name NAME] [--cwd PATH] --cmd "CMD COMMAND"
 agent-terminal run [--name NAME] [--cwd PATH] --wsl "LINUX COMMAND"
 
 agent-terminal ping [--name NAME]
@@ -218,9 +261,9 @@ Suggested instruction:
 > For commands I should be able to watch, invoke `AgentTerminal.exe run --name
 > <session> -- <program> <args>` instead of using a hidden shell. Create additional
 > destinations with `new-tab` or `split-pane`, assigning every destination a unique
-> session name. Use `--shell` only when PowerShell syntax is required and `--wsl` only
-> for Linux commands. Never silently fall back to headless execution when visibility
-> was requested.
+> session name and the appropriate `--profile`. Use `--command` to honor that profile;
+> use direct `--`, `--shell`, `--cmd`, or `--wsl` only for an intentional override.
+> Never silently fall back to headless execution when visibility was requested.
 
 See [AGENTS.md](AGENTS.md) for a complete instruction file designed for coding agents.
 
@@ -258,7 +301,9 @@ AgentTerminal host in a Windows Terminal tab or pane
           │
           ├── direct Windows child process
           ├── PowerShell child process
-          └── wsl.exe → bash -lc
+          ├── cmd.exe → /d /s /c
+          ├── wsl.exe → bash -lc
+          └── conda.exe run → PowerShell
           │
           ▼
 stdout, stderr, and exit code
@@ -276,7 +321,7 @@ AgentTerminal is intended for trusted local use.
 - Named pipes use the current-user-only option.
 - Session names are validated before being used in pipe and window identifiers.
 - Direct execution passes arguments without invoking a command shell.
-- PowerShell and WSL modes are explicitly selected and execute shell code verbatim.
+- PowerShell, CMD, WSL, and Conda profile commands execute shell code verbatim.
 - Commands run with the current user's permissions; AgentTerminal is not a sandbox.
 - Output is displayed and returned to the caller but is not intentionally persisted by
   AgentTerminal.

@@ -21,24 +21,26 @@ structured output. See `docs/INTEGRATIONS.md`. Do not scrape human-readable CLI 
 - A **session** is one independently controlled AgentTerminal host occupying a tab or pane.
 - `--window` selects the visual window group.
 - `--name` selects the session used by `run`, `ping`, and `stop`.
+- `--profile` declares the session command environment: `powershell`, `cmd`, `wsl`, or
+  `conda`.
 - Every live session name must be unique, including sessions in different windows.
 
 Create a window and its first session:
 
 ```powershell
-& 'D:\AgentTerminal\dist\AgentTerminal.exe' new-window --window work --name shell --cwd 'D:\path\to\repo'
+& 'D:\AgentTerminal\dist\AgentTerminal.exe' new-window --window work --name shell --profile powershell --cwd 'D:\path\to\repo'
 ```
 
 Add a tab on the fly:
 
 ```powershell
-& 'D:\AgentTerminal\dist\AgentTerminal.exe' new-tab --window work --name tests --cwd 'D:\path\to\repo'
+& 'D:\AgentTerminal\dist\AgentTerminal.exe' new-tab --window work --name linux --profile wsl --distro Ubuntu-22.04 --cwd 'D:\path\to\repo'
 ```
 
 Split the active tab on the fly:
 
 ```powershell
-& 'D:\AgentTerminal\dist\AgentTerminal.exe' split-pane --window work --name server --vertical --size 0.40 --cwd 'D:\path\to\repo'
+& 'D:\AgentTerminal\dist\AgentTerminal.exe' split-pane --window work --name ml --profile conda --conda-env base --vertical --size 0.40 --cwd 'D:\path\to\repo'
 ```
 
 `--horizontal` and `--vertical` control split orientation. `--size` is the fraction
@@ -48,9 +50,16 @@ currently active tab in the named window.
 Route work by session name:
 
 ```powershell
-& 'D:\AgentTerminal\dist\AgentTerminal.exe' run --name tests -- dotnet test
-& 'D:\AgentTerminal\dist\AgentTerminal.exe' run --name server --shell 'dotnet run'
+& 'D:\AgentTerminal\dist\AgentTerminal.exe' run --name shell --command 'dotnet test'
+& 'D:\AgentTerminal\dist\AgentTerminal.exe' run --name linux --command 'uname -a'
+& 'D:\AgentTerminal\dist\AgentTerminal.exe' run --name ml --command 'python --version'
 ```
+
+Use `--command` when the command should follow the destination profile. `ping --name
+NAME` returns the profile and any Conda environment or WSL distribution in JSON mode.
+Direct `--`, `--shell`, `--cmd`, and `--wsl` remain available as explicit per-command
+overrides. Profile commands are stateless: do not assume `cd`, activated environments,
+aliases, or shell variables persist between submissions.
 
 ## Required behavior
 
@@ -187,7 +196,8 @@ The value after `--wsl` must be one quoted Linux shell command string.
 
 1. Run `ping --name <session>`.
 2. Create a uniquely named tab, pane, or window if a new destination is needed.
-3. Select direct `--`, Windows `--shell`, or Linux `--wsl` execution.
+3. Prefer `--command` to use the session profile; select direct `--`, `--shell`,
+   `--cmd`, or `--wsl` only as an intentional override.
 4. Include the appropriate working directory.
 5. Submit the command and stream its returned output to your normal reasoning loop.
 6. Check the returned exit code before continuing.
