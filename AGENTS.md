@@ -66,6 +66,18 @@ then attempt to activate a Windows Conda environment inside it. WSL-hosted calle
 pass `/mnt/c/...` or another `/mnt/<drive>/...` value as `cwd`; AgentTerminal converts
 that mount path to the corresponding local Windows path.
 
+## Long-running commands
+
+Never submit a server, monitor, data download, trading process, or other potentially
+long-running command as a foreground MCP call. Set `background: true` on
+`agent_terminal_run`. Record the returned `jobId`, then use `agent_terminal_job` with
+`status`, `logs`, or `stop`. The visible session stays responsive while the job runs.
+
+Each session supports one current background job. Use `agent_terminal_job` with
+`action: stop` before replacing a running job. Stopping the session also terminates its
+background process tree. Do not infer failure merely because a long-running job remains
+in `running` state; inspect its logs and stop it only when requested or required.
+
 ## Required behavior
 
 When the user asks to see terminal activity, route each relevant shell command through AgentTerminal instead of running it with a hidden/headless execution tool.

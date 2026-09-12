@@ -45,3 +45,5 @@ Integrators should:
 - Keep the MCP server on stdio rather than exposing it over a network.
 - Avoid placing secrets in commands, arguments, output, screenshots, or logs.
 - Apply bounded timeouts at the agent-host layer.
+- Start commands that may exceed a tool-call timeout as supervised background jobs;
+  inspect and stop them with the job tool rather than abandoning a foreground call.

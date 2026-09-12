@@ -115,6 +115,7 @@ internal static class McpServer
         {
             "agent_terminal_open" => BuildOpenArguments(arguments),
             "agent_terminal_run" => BuildRunArguments(arguments),
+            "agent_terminal_job" => BuildJobArguments(arguments),
             "agent_terminal_ping" => ["ping", "--name", RequiredString(arguments, "session")],
             "agent_terminal_stop" => ["stop", "--name", RequiredString(arguments, "session")],
             _ => throw new McpProtocolException(-32602, $"Unknown tool: {name}"),
@@ -184,11 +185,20 @@ internal static class McpServer
         return result.ToArray();
     }
 
+    private static string[] BuildJobArguments(JsonElement arguments)
+    {
+        string action = RequiredString(arguments, "action");
+        if (action is not ("status" or "logs" or "stop"))
+            throw new McpProtocolException(-32602, "job action must be status, logs, or stop");
+        return ["job", action, "--name", RequiredString(arguments, "session")];
+    }
+
     private static string[] BuildRunArguments(JsonElement arguments)
     {
         string mode = RequiredString(arguments, "mode");
         var result = new List<string> { "run", "--name", RequiredString(arguments, "session") };
         AddOptional(result, arguments, "cwd", "--cwd");
+        if (OptionalBoolean(arguments, "background")) result.Add("--background");
 
         switch (mode)
         {
@@ -298,11 +308,30 @@ internal static class McpServer
                     arguments = new { type = "array", items = new { type = "string" }, description = "Argument list for direct mode." },
                     command = new { type = "string", description = "One command string for session, powershell, cmd, or wsl mode." },
                     cwd = new { type = "string", description = "Optional existing Windows working-directory path." },
+                    background = new { type = "boolean", description = "Start a supervised background job and return immediately. Use for servers, monitors, downloads, and other long-running commands." },
                 },
                 required = new[] { "session", "mode" },
                 additionalProperties = false,
             },
             annotations = new { readOnlyHint = false, destructiveHint = true, idempotentHint = false, openWorldHint = true },
+        },
+        new
+        {
+            name = "agent_terminal_job",
+            title = "Manage Visible Background Job",
+            description = "Inspect logs or status, or stop the single supervised background job in an AgentTerminal session.",
+            inputSchema = new
+            {
+                type = "object",
+                properties = new
+                {
+                    session = new { type = "string" },
+                    action = new { type = "string", @enum = new[] { "status", "logs", "stop" } },
+                },
+                required = new[] { "session", "action" },
+                additionalProperties = false,
+            },
+            annotations = new { readOnlyHint = false, destructiveHint = true, idempotentHint = false, openWorldHint = false },
         },
         new
         {

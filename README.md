@@ -30,6 +30,7 @@ instead of implementing another terminal emulator.
 - Local named-pipe transport restricted to the current Windows user
 - Built-in MCP stdio server for agent-independent tool discovery
 - Structured JSON output and provider-neutral function schemas
+- Supervised background jobs for servers, downloads, monitors, and trading dry-runs
 
 ## What it does not provide
 
@@ -152,6 +153,26 @@ child process, reliable output boundaries, and an exact exit code. Use `--cwd`, 
 environment, or an explicit command when state is needed; shell variables and `cd`
 changes do not carry into the next command.
 
+## Long-running background jobs
+
+Commands such as development servers, data downloads, monitors, and trading dry-runs
+can outlive an agent tool-call timeout. Start them as supervised background jobs so the
+control connection returns immediately and the session remains reachable:
+
+```powershell
+& $at run --name ml --background --command `
+  'freqtrade trade -c user_data/config.dryrun.json --strategy FinalScalp_v1'
+
+& $at job status --name ml
+& $at job logs --name ml
+& $at job stop --name ml
+```
+
+Each session holds one current background job and retains up to approximately one
+million characters each of stdout and stderr. Output continues streaming in the visible
+terminal. `job stop` terminates the complete child-process tree with a bounded wait.
+Stopping the AgentTerminal session also stops its supervised job.
+
 ## Command execution modes
 
 ### Direct Windows execution
@@ -223,10 +244,12 @@ agent-terminal split-pane [--window WINDOW] --name NAME [--cwd PATH]
                            [--size 0.05-0.95]
 
 agent-terminal run [--name NAME] [--cwd PATH] -- PROGRAM [ARGUMENTS...]
-agent-terminal run [--name NAME] [--cwd PATH] --command "PROFILE COMMAND"
+agent-terminal run [--name NAME] [--cwd PATH] [--background]
+                   --command "PROFILE COMMAND"
 agent-terminal run [--name NAME] [--cwd PATH] --shell "POWERSHELL COMMAND"
 agent-terminal run [--name NAME] [--cwd PATH] --cmd "CMD COMMAND"
 agent-terminal run [--name NAME] [--cwd PATH] --wsl "LINUX COMMAND"
+agent-terminal job status|logs|stop [--name NAME]
 
 agent-terminal ping [--name NAME]
 agent-terminal stop [--name NAME]
@@ -278,8 +301,8 @@ AgentTerminal includes a local MCP stdio server:
 AgentTerminal.exe mcp
 ```
 
-It exposes `agent_terminal_open`, `agent_terminal_run`, `agent_terminal_ping`, and
-`agent_terminal_stop`. Clients without MCP support can use the provider-neutral
+It exposes `agent_terminal_open`, `agent_terminal_run`, `agent_terminal_job`,
+`agent_terminal_ping`, and `agent_terminal_stop`. Clients without MCP support can use the provider-neutral
 [function-tool manifest](integrations/function-tools.json) together with structured CLI
 output:
 

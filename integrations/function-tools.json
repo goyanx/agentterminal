@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0",
-  "description": "Provider-neutral function tool definitions for AgentTerminal 0.4.x.",
+  "description": "Provider-neutral function tool definitions for AgentTerminal 0.5.x.",
   "tools": [
     {
       "name": "agent_terminal_open",
@@ -87,9 +87,31 @@
           "cwd": {
             "type": "string",
             "description": "Optional existing Windows working-directory path."
+          },
+          "background": {
+            "type": "boolean",
+            "description": "Start a supervised background job and return immediately. Use for servers, monitors, downloads, and other long-running commands."
           }
         },
         "required": ["session", "mode"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "agent_terminal_job",
+      "description": "Inspect logs or status, or stop the single supervised background job in an AgentTerminal session.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["status", "logs", "stop"]
+          }
+        },
+        "required": ["session", "action"],
         "additionalProperties": false
       }
     },

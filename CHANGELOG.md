@@ -2,6 +2,21 @@
 
 All notable changes to AgentTerminal are documented in this file.
 
+## [0.5.0] - 2026-09-13
+
+### Added
+
+- Supervised background commands through `run --background` and the MCP run tool.
+- Background-job status, captured logs, and process-tree stop operations.
+- A provider-neutral `agent_terminal_job` MCP/function tool.
+- Bounded in-memory stdout and stderr capture for the current background job.
+
+### Fixed
+
+- Long-running commands no longer have to occupy the session control connection and
+  trigger agent-host timeouts.
+- Stopping a session also terminates its supervised background process tree.
+
 ## [0.4.1] - 2026-09-13
 
 ### Fixed

@@ -1,6 +1,6 @@
 # Agent integrations
 
-AgentTerminal exposes the same four operations through three provider-neutral surfaces:
+AgentTerminal exposes the same five operations through three provider-neutral surfaces:
 
 1. Human-readable command-line output for interactive use
 2. Structured JSON command-line output for subprocess adapters
@@ -26,6 +26,7 @@ The server supports protocol versions `2024-11-05`, `2025-03-26`, `2025-06-18`, 
 | --- | --- |
 | `agent_terminal_open` | Create a profiled window, tab, or split pane |
 | `agent_terminal_run` | Run through the session profile or an explicit execution mode |
+| `agent_terminal_job` | Inspect or stop a supervised background job |
 | `agent_terminal_ping` | Check whether a session is reachable |
 | `agent_terminal_stop` | Stop one session |
 
@@ -168,6 +169,15 @@ document rather than inferring success from text.
 - `mode: cmd` requires `command` and maps to `--cmd`.
 - `mode: wsl` requires `command` and maps to `--wsl`.
 - `cwd` is always an optional Windows host path.
+- Set `background: true` for commands that may outlive the MCP host's tool-call timeout.
+  The call returns immediately with a `jobId` and `status` while output remains visible.
+
+### `agent_terminal_job`
+
+- `action: status` returns the current job state and eventual command exit code.
+- `action: logs` returns captured stdout and stderr plus job state.
+- `action: stop` terminates the complete supervised process tree.
+- Each visible session tracks one current background job.
 
 Available session profiles are `powershell`, `cmd`, `wsl`, and `conda`. Profile names,
 the selected Conda environment, and the selected WSL distribution are returned by
@@ -177,7 +187,7 @@ structured `ping` calls so an agent can verify a destination before routing work
 
 Hermes Agent supports custom MCP stdio servers. Add an `agentterminal` entry to the
 Hermes `mcp_servers` configuration using the WSL example above, then reload or restart
-Hermes so it discovers the four tools. Hermes prefixes discovered names with the MCP
+Hermes so it discovers the five tools. Hermes prefixes discovered names with the MCP
 server name; consult the Hermes tool list after loading.
 
 Keep command approval enabled. AgentTerminal deliberately delegates authorization to

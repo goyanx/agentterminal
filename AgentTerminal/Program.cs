@@ -43,7 +43,7 @@ internal static class AgentTerminalApp
         if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
         {
             if (JsonOutput)
-                WriteJson(new { ok = true, command = "help", commands = new[] { "new-window", "new-tab", "split-pane", "run", "ping", "stop", "mcp" } });
+                WriteJson(new { ok = true, command = "help", commands = new[] { "new-window", "new-tab", "split-pane", "run", "job", "ping", "stop", "mcp" } });
             else
                 PrintHelp();
             return 0;
@@ -58,6 +58,7 @@ internal static class AgentTerminalApp
             "host" => await HostAsync(args[1..]),
             "mcp" => await McpServer.RunAsync(),
             "run" => await RunCommandAsync(args[1..]),
+            "job" => await JobCommandAsync(args[1..]),
             "ping" => await SimpleRequestAsync(args[1..], "ping"),
             "stop" => await SimpleRequestAsync(args[1..], "stop"),
             _ => throw new ArgumentException($"Unknown command '{args[0]}'. Run with --help."),
@@ -178,6 +179,7 @@ internal static class AgentTerminalApp
         Console.Title = $"Agent Terminal · {name} · {ProfileLabel(profile, condaEnv, distro)}";
 
         WriteBanner(name, window, cwd, profile, condaEnv, distro);
+        var jobState = new JobState();
         using var shutdown = new CancellationTokenSource();
         Console.CancelKeyPress += (_, eventArgs) =>
         {
@@ -191,7 +193,7 @@ internal static class AgentTerminalApp
             try
             {
                 await pipe.WaitForConnectionAsync(shutdown.Token);
-                bool shouldStop = await HandleConnectionAsync(pipe, name, cwd, profile, condaEnv, distro, shutdown.Token);
+                bool shouldStop = await HandleConnectionAsync(pipe, name, cwd, profile, condaEnv, distro, jobState, shutdown.Token);
                 if (shouldStop) break;
             }
             catch (OperationCanceledException) when (shutdown.IsCancellationRequested)
@@ -204,12 +206,13 @@ internal static class AgentTerminalApp
             }
         }
 
+        await StopBackgroundJobAsync(jobState);
         Console.WriteLine("\nAgentTerminal host stopped.");
         return 0;
     }
 
     private static async Task<bool> HandleConnectionAsync(Stream pipe, string name, string hostCwd, string profile,
-        string? condaEnv, string? distro, CancellationToken cancellationToken)
+        string? condaEnv, string? distro, JobState jobState, CancellationToken cancellationToken)
     {
         using var reader = new StreamReader(pipe, Encoding.UTF8, false, 4096, leaveOpen: true);
         using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true) { AutoFlush = true };
@@ -225,10 +228,21 @@ internal static class AgentTerminalApp
                 await SendAsync(writer, new Response("pong", Message: name, Profile: profile, CondaEnv: condaEnv, Distro: distro), cancellationToken);
                 return false;
             case "stop":
+                await StopBackgroundJobAsync(jobState);
                 await SendAsync(writer, new Response("result", ExitCode: 0), cancellationToken);
                 return true;
             case "run":
-                await ExecuteAsync(request, writer, hostCwd, profile, condaEnv, distro, cancellationToken);
+                await ExecuteAsync(request, writer, hostCwd, profile, condaEnv, distro, jobState, cancellationToken);
+                return false;
+            case "job-status":
+                await SendJobStatusAsync(writer, jobState, cancellationToken);
+                return false;
+            case "job-logs":
+                await SendJobLogsAsync(writer, jobState, cancellationToken);
+                return false;
+            case "job-stop":
+                await StopBackgroundJobAsync(jobState);
+                await SendJobStatusAsync(writer, jobState, cancellationToken);
                 return false;
             default:
                 await SendAsync(writer, new Response("error", Message: $"Unknown action '{request.Action}'."), cancellationToken);
@@ -237,7 +251,7 @@ internal static class AgentTerminalApp
     }
 
     private static async Task ExecuteAsync(Request request, StreamWriter writer, string hostCwd, string profile,
-        string? condaEnv, string? distro, CancellationToken cancellationToken)
+        string? condaEnv, string? distro, JobState jobState, CancellationToken cancellationToken)
     {
         if (request.Command is not { Length: > 0 })
         {
@@ -324,7 +338,19 @@ internal static class AgentTerminalApp
                 startInfo.ArgumentList.Add(arg);
         }
 
-        using var process = new Process { StartInfo = startInfo };
+        if (request.Background)
+        {
+            bool hasActiveJob;
+            lock (jobState.Gate)
+                hasActiveJob = jobState.Current is { Status: "running" or "stopping" };
+            if (hasActiveJob)
+            {
+                await SendAsync(writer, new Response("error", Message: "This session already has a running background job. Check or stop it with the job command."), cancellationToken);
+                return;
+            }
+        }
+
+        var process = new Process { StartInfo = startInfo };
         try
         {
             process.Start();
@@ -332,10 +358,26 @@ internal static class AgentTerminalApp
         }
         catch (Exception ex)
         {
+            process.Dispose();
             Console.ForegroundColor = ConsoleColor.Red;
             Console.Error.WriteLine(ex.Message);
             Console.ResetColor();
             await SendAsync(writer, new Response("error", Message: ex.Message), cancellationToken);
+            return;
+        }
+
+        if (request.Background)
+        {
+            var job = new BackgroundJob(Guid.NewGuid().ToString("N")[..12], process, display, cwd);
+            lock (jobState.Gate)
+                jobState.Current = job;
+
+            job.Completion = MonitorBackgroundJobAsync(job);
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"[job {job.Id} started]");
+            Console.ResetColor();
+            await SendAsync(writer, new Response("result", ExitCode: 0, JobId: job.Id, Status: job.Status,
+                StartedAt: job.StartedAt), cancellationToken);
             return;
         }
 
@@ -349,6 +391,7 @@ internal static class AgentTerminalApp
         Console.WriteLine($"[exit {process.ExitCode}]");
         Console.ResetColor();
         await SendLockedAsync(writer, writeGate, new Response("result", ExitCode: process.ExitCode), cancellationToken);
+        process.Dispose();
     }
 
     private static async Task PumpAsync(StreamReader source, string type, TextWriter console, StreamWriter client,
@@ -366,12 +409,173 @@ internal static class AgentTerminalApp
         }
     }
 
+    private static async Task MonitorBackgroundJobAsync(BackgroundJob job)
+    {
+        Task stdout = PumpBackgroundAsync(job.Process.StandardOutput, Console.Out, job.Stdout, job);
+        Task stderr = PumpBackgroundAsync(job.Process.StandardError, Console.Error, job.Stderr, job);
+        try
+        {
+            await job.Process.WaitForExitAsync();
+            await Task.WhenAll(stdout, stderr);
+            lock (job.Gate)
+            {
+                job.ExitCode = job.Process.ExitCode;
+                job.Status = job.StopRequested ? "stopped" : "exited";
+                job.FinishedAt = DateTimeOffset.UtcNow;
+            }
+            Console.ForegroundColor = job.Process.ExitCode == 0 ? ConsoleColor.DarkGray : ConsoleColor.Red;
+            Console.WriteLine($"[job {job.Id} {job.Status}, exit {job.Process.ExitCode}]");
+            Console.ResetColor();
+        }
+        catch (Exception ex)
+        {
+            lock (job.Gate)
+            {
+                job.Status = "failed";
+                job.FinishedAt = DateTimeOffset.UtcNow;
+                AppendBounded(job.Stderr, $"{ex.Message}{Environment.NewLine}");
+            }
+        }
+        finally
+        {
+            job.Process.Dispose();
+        }
+    }
+
+    private static async Task PumpBackgroundAsync(StreamReader source, TextWriter console, StringBuilder capture,
+        BackgroundJob job)
+    {
+        char[] buffer = new char[2048];
+        while (true)
+        {
+            int count = await source.ReadAsync(buffer);
+            if (count == 0) break;
+            string chunk = new(buffer, 0, count);
+            await console.WriteAsync(chunk);
+            await console.FlushAsync();
+            lock (job.Gate) AppendBounded(capture, chunk);
+        }
+    }
+
+    private static void AppendBounded(StringBuilder builder, string value)
+    {
+        const int maxCharacters = 1_000_000;
+        builder.Append(value);
+        if (builder.Length > maxCharacters)
+            builder.Remove(0, builder.Length - maxCharacters);
+    }
+
+    private static async Task StopBackgroundJobAsync(JobState state)
+    {
+        BackgroundJob? job;
+        lock (state.Gate)
+        {
+            job = state.Current;
+            if (job is { Status: "running" })
+            {
+                job.StopRequested = true;
+                job.Status = "stopping";
+            }
+        }
+        if (job is null || !job.StopRequested || job.FinishedAt is not null) return;
+
+        try
+        {
+            var taskkill = new ProcessStartInfo
+            {
+                FileName = Path.Combine(Environment.SystemDirectory, "taskkill.exe"),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            taskkill.ArgumentList.Add("/PID");
+            taskkill.ArgumentList.Add(job.Process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            taskkill.ArgumentList.Add("/T");
+            taskkill.ArgumentList.Add("/F");
+            using var killer = Process.Start(taskkill);
+            if (killer is not null) await killer.WaitForExitAsync();
+
+            if (job.Completion is not null)
+            {
+                try { await job.Completion.WaitAsync(TimeSpan.FromSeconds(5)); }
+                catch (TimeoutException) { }
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // The job exited between the status check and the stop request.
+        }
+    }
+
+    private static async Task SendJobStatusAsync(StreamWriter writer, JobState state, CancellationToken cancellationToken)
+    {
+        BackgroundJob? job;
+        lock (state.Gate) job = state.Current;
+        if (job is null)
+        {
+            await SendAsync(writer, new Response("error", Message: "This session has no background job."), cancellationToken);
+            return;
+        }
+
+        string status;
+        int? exitCode;
+        DateTimeOffset? finishedAt;
+        lock (job.Gate)
+        {
+            status = job.Status;
+            exitCode = job.ExitCode;
+            finishedAt = job.FinishedAt;
+        }
+        await SendAsync(writer, new Response("result", ExitCode: 0, JobId: job.Id, Status: status,
+            JobExitCode: exitCode, StartedAt: job.StartedAt, FinishedAt: finishedAt), cancellationToken);
+    }
+
+    private static async Task SendJobLogsAsync(StreamWriter writer, JobState state, CancellationToken cancellationToken)
+    {
+        BackgroundJob? job;
+        lock (state.Gate) job = state.Current;
+        if (job is null)
+        {
+            await SendAsync(writer, new Response("error", Message: "This session has no background job."), cancellationToken);
+            return;
+        }
+
+        string stdout;
+        string stderr;
+        string status;
+        int? exitCode;
+        DateTimeOffset? finishedAt;
+        lock (job.Gate)
+        {
+            stdout = job.Stdout.ToString();
+            stderr = job.Stderr.ToString();
+            status = job.Status;
+            exitCode = job.ExitCode;
+            finishedAt = job.FinishedAt;
+        }
+        if (stdout.Length > 0) await SendAsync(writer, new Response("stdout", Data: stdout), cancellationToken);
+        if (stderr.Length > 0) await SendAsync(writer, new Response("stderr", Data: stderr), cancellationToken);
+        await SendAsync(writer, new Response("result", ExitCode: 0, JobId: job.Id, Status: status,
+            JobExitCode: exitCode, StartedAt: job.StartedAt, FinishedAt: finishedAt), cancellationToken);
+    }
+
     private static async Task<int> RunCommandAsync(string[] args)
     {
         var parsed = ParseRun(args);
         string name = ValidateName(parsed.Name ?? DefaultName);
-        var request = new Request("run", parsed.Command, parsed.Cwd, parsed.Mode);
+        var request = new Request("run", parsed.Command, parsed.Cwd, parsed.Mode, parsed.Background);
         return await SendRequestAsync(name, request, echoOutput: !JsonOutput);
+    }
+
+    private static async Task<int> JobCommandAsync(string[] args)
+    {
+        if (args.Length == 0 || args[0] is not ("status" or "logs" or "stop"))
+            throw new ArgumentException("Use: job status|logs|stop --name NAME");
+        string operation = args[0];
+        var options = ParseOptions(args[1..]);
+        string name = ValidateName(options.Value("name") ?? DefaultName);
+        return await SendRequestAsync(name, new Request($"job-{operation}"), echoOutput: !JsonOutput && operation == "logs");
     }
 
     private static async Task<int> SimpleRequestAsync(string[] args, string action)
@@ -440,7 +644,15 @@ internal static class AgentTerminalApp
                             exitCode = response.ExitCode ?? 0,
                             stdout = stdout.ToString(),
                             stderr = stderr.ToString(),
+                            jobId = response.JobId,
+                            status = response.Status,
+                            jobExitCode = response.JobExitCode,
+                            startedAt = response.StartedAt,
+                            finishedAt = response.FinishedAt,
                         });
+                    else if (response.JobId is not null)
+                        Console.WriteLine($"Job {response.JobId}: {response.Status}" +
+                            (response.JobExitCode is null ? "" : $" (exit {response.JobExitCode})"));
                     return response.ExitCode ?? 0;
                 case "error":
                     if (JsonOutput)
@@ -633,6 +845,7 @@ internal static class AgentTerminalApp
         string? name = null;
         string? cwd = null;
         string mode = "direct";
+        bool background = false;
         var command = new List<string>();
         for (int i = 0; i < args.Length; i++)
         {
@@ -640,6 +853,11 @@ internal static class AgentTerminalApp
             {
                 command.AddRange(args[(i + 1)..]);
                 break;
+            }
+            if (args[i] == "--background")
+            {
+                background = true;
+                continue;
             }
             if (args[i] == "--shell")
             {
@@ -683,7 +901,7 @@ internal static class AgentTerminalApp
             throw new ArgumentException($"Unexpected argument '{args[i]}'. Put direct commands after --.");
         }
         if (command.Count == 0) throw new ArgumentException("No command supplied. Use: run [options] -- <program> [arguments]");
-        return new RunOptions(name, cwd, mode, command.ToArray());
+        return new RunOptions(name, cwd, mode, background, command.ToArray());
     }
 
     private static void WriteBanner(string name, string window, string cwd, string profile, string? condaEnv, string? distro)
@@ -713,10 +931,11 @@ internal static class AgentTerminalApp
                                       [--horizontal|--vertical] [--size 0.05-0.95]
                                       [--conda-env ENV] [--distro DISTRO]
           agent-terminal run   [--name NAME] [--cwd PATH] -- PROGRAM [ARGUMENTS...]
-          agent-terminal run   [--name NAME] [--cwd PATH] --command "SESSION-PROFILE COMMAND"
+          agent-terminal run   [--name NAME] [--cwd PATH] [--background] --command "SESSION-PROFILE COMMAND"
           agent-terminal run   [--name NAME] [--cwd PATH] --shell "POWERSHELL COMMAND"
           agent-terminal run   [--name NAME] [--cwd PATH] --cmd "CMD COMMAND"
           agent-terminal run   [--name NAME] [--cwd PATH] --wsl "LINUX COMMAND"
+          agent-terminal job   status|logs|stop [--name NAME]
           agent-terminal ping  [--name NAME]
           agent-terminal stop  [--name NAME]
 
@@ -758,10 +977,35 @@ internal static class AgentTerminalApp
         else Console.Error.WriteLine($"agent-terminal: {message}");
     }
 
-    private sealed record Request(string Action, string[]? Command = null, string? Cwd = null, string? Mode = null);
+    private sealed record Request(string Action, string[]? Command = null, string? Cwd = null, string? Mode = null,
+        bool Background = false);
     private sealed record Response(string Type, string? Data = null, int? ExitCode = null, string? Message = null,
-        string? Profile = null, string? CondaEnv = null, string? Distro = null);
-    private sealed record RunOptions(string? Name, string? Cwd, string Mode, string[] Command);
+        string? Profile = null, string? CondaEnv = null, string? Distro = null, string? JobId = null,
+        string? Status = null, int? JobExitCode = null, DateTimeOffset? StartedAt = null,
+        DateTimeOffset? FinishedAt = null);
+    private sealed record RunOptions(string? Name, string? Cwd, string Mode, bool Background, string[] Command);
+    private sealed class JobState
+    {
+        public object Gate { get; } = new();
+        public BackgroundJob? Current { get; set; }
+    }
+
+    private sealed class BackgroundJob(string id, Process process, string command, string cwd)
+    {
+        public string Id { get; } = id;
+        public Process Process { get; } = process;
+        public string Command { get; } = command;
+        public string Cwd { get; } = cwd;
+        public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
+        public DateTimeOffset? FinishedAt { get; set; }
+        public string Status { get; set; } = "running";
+        public int? ExitCode { get; set; }
+        public bool StopRequested { get; set; }
+        public StringBuilder Stdout { get; } = new();
+        public StringBuilder Stderr { get; } = new();
+        public object Gate { get; } = new();
+        public Task? Completion { get; set; }
+    }
     private sealed record ParsedOptions(Dictionary<string, string?> Values)
     {
         public string? Value(string key) => Values.GetValueOrDefault(key);
