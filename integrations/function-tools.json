@@ -1,10 +1,10 @@
 {
   "schemaVersion": "1.0",
-  "description": "Provider-neutral function tool definitions for AgentTerminal 0.5.x.",
+  "description": "Provider-neutral function tool definitions for AgentTerminal 0.6.x.",
   "tools": [
     {
       "name": "agent_terminal_open",
-      "description": "Create a visible AgentTerminal window, tab, or split pane with a PowerShell, CMD, WSL, or Conda profile. Every live session name must be unique.",
+      "description": "Create a visible, human-typable AgentTerminal window, tab, or split pane with a PowerShell, CMD, WSL, or Conda profile. Every live session name must be unique.",
       "inputSchema": {
         "type": "object",
         "properties": {

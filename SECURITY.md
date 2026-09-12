@@ -12,6 +12,8 @@ not isolation.
 - Direct execution avoids a command shell; PowerShell, CMD, WSL, and Conda profile
   commands intentionally interpret shell code.
 - MCP clients and function-tool hosts are responsible for user approval and policy.
+- Commands typed at the visible human prompt execute with the same current-user
+  permissions as agent-submitted commands; the prompt is not a sandbox.
 
 Only connect trusted local clients. Do not place an unauthenticated HTTP, WebSocket,
 RPC, or public network bridge in front of AgentTerminal.

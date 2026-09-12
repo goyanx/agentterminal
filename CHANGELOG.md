@@ -2,6 +2,18 @@
 
 All notable changes to AgentTerminal are documented in this file.
 
+## [0.6.0] - 2026-09-13
+
+### Added
+
+- A line-oriented human command prompt in every visible AgentTerminal session.
+- Shared human/agent command routing with visible source labels.
+- Human prompt controls for working directory, background jobs, logs, and shutdown.
+
+### Fixed
+
+- Cancelling a host now terminates an active foreground child-process tree.
+
 ## [0.5.0] - 2026-09-13
 
 ### Added

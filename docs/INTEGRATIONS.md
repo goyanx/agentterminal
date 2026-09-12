@@ -8,6 +8,11 @@ AgentTerminal exposes the same five operations through three provider-neutral su
 
 No integration requires an API key, model provider, network port, or cloud service.
 
+Visible sessions also accept line-oriented commands from the user. Human and agent
+commands share the same serialized session and are labelled by source in the terminal.
+The agent does not need to claim or release ownership; it should ping before use and
+route long-running work through supervised background jobs.
+
 ## MCP stdio server
 
 Start the MCP server with:

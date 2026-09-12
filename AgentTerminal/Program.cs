@@ -186,6 +186,7 @@ internal static class AgentTerminalApp
             eventArgs.Cancel = true;
             shutdown.Cancel();
         };
+        Task interactiveInput = InteractiveInputLoopAsync(name, cwd, profile, shutdown.Token);
 
         while (!shutdown.IsCancellationRequested)
         {
@@ -206,9 +207,106 @@ internal static class AgentTerminalApp
             }
         }
 
+        shutdown.Cancel();
         await StopBackgroundJobAsync(jobState);
+        try { await interactiveInput.WaitAsync(TimeSpan.FromSeconds(1)); }
+        catch (OperationCanceledException) { }
+        catch (TimeoutException) { }
         Console.WriteLine("\nAgentTerminal host stopped.");
         return 0;
+    }
+
+    private static async Task InteractiveInputLoopAsync(string name, string initialCwd, string profile,
+        CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        string cwd = initialCwd;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.Write($"\nhuman:{name}> ");
+            Console.ResetColor();
+
+            string? line;
+            try { line = await Console.In.ReadLineAsync(cancellationToken); }
+            catch (OperationCanceledException) { return; }
+            if (line is null) return;
+            line = line.Trim();
+            if (line.Length == 0) continue;
+
+            try
+            {
+                if (line == ":help")
+                {
+                    PrintInteractiveHelp();
+                    continue;
+                }
+                if (line.StartsWith(":cd ", StringComparison.OrdinalIgnoreCase))
+                {
+                    string requested = line[4..].Trim().Trim('"');
+                    string next = ResolveWorkingDirectory(requested, profile);
+                    if (!Directory.Exists(next)) throw new DirectoryNotFoundException($"Working directory does not exist: {next}");
+                    cwd = next;
+                    Console.WriteLine($"Human working directory: {cwd}");
+                    continue;
+                }
+                if (line == ":status")
+                {
+                    await SendRequestAsync(name, new Request("job-status", Source: "human"), echoOutput: false);
+                    continue;
+                }
+                if (line == ":logs")
+                {
+                    await SendRequestAsync(name, new Request("job-logs", Source: "human"), echoOutput: true);
+                    continue;
+                }
+                if (line == ":stop-job")
+                {
+                    await SendRequestAsync(name, new Request("job-stop", Source: "human"), echoOutput: false);
+                    continue;
+                }
+                if (line == ":exit")
+                {
+                    await SendRequestAsync(name, new Request("stop", Source: "human"), echoOutput: false);
+                    return;
+                }
+                if (line.StartsWith(":background ", StringComparison.OrdinalIgnoreCase))
+                {
+                    string command = line[12..].Trim();
+                    if (command.Length == 0) throw new ArgumentException("Enter a command after :background.");
+                    await SendRequestAsync(name, new Request("run", [command], cwd, "session", true, "human"), echoOutput: false);
+                    continue;
+                }
+                if (line.StartsWith(':'))
+                {
+                    Console.Error.WriteLine("Unknown interactive command. Type :help.");
+                    continue;
+                }
+
+                await SendRequestAsync(name, new Request("run", [line], cwd, "session", Source: "human"), echoOutput: false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.Error.WriteLine($"[human input error: {ex.Message}]");
+                Console.ResetColor();
+            }
+        }
+    }
+
+    private static void PrintInteractiveHelp()
+    {
+        Console.WriteLine("""
+            Type a command and press Enter to run it through this session's profile.
+              :cd PATH             change the human prompt's working directory
+              :background COMMAND start a supervised background job
+              :status              show background-job status
+              :logs                replay captured background-job output
+              :stop-job            stop the supervised background job
+              :exit                stop this AgentTerminal session
+              :help                show this help
+            AI commands may use the same session whenever it is idle.
+            """);
     }
 
     private static async Task<bool> HandleConnectionAsync(Stream pipe, string name, string hostCwd, string profile,
@@ -272,7 +370,7 @@ internal static class AgentTerminalApp
             : string.Join(" ", request.Command.Select(QuoteForDisplay));
 
         Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.Write($"\n[{DateTimeOffset.Now:HH:mm:ss}] {cwd}\n❯ ");
+        Console.Write($"\n[{DateTimeOffset.Now:HH:mm:ss}] [{request.Source ?? "agent"}] {cwd}\n❯ ");
         Console.ForegroundColor = ConsoleColor.White;
         Console.WriteLine(display);
         Console.ResetColor();
@@ -384,8 +482,21 @@ internal static class AgentTerminalApp
         var writeGate = new SemaphoreSlim(1, 1);
         Task stdout = PumpAsync(process.StandardOutput, "stdout", Console.Out, writer, writeGate, cancellationToken);
         Task stderr = PumpAsync(process.StandardError, "stderr", Console.Error, writer, writeGate, cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-        await Task.WhenAll(stdout, stderr);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+            await Task.WhenAll(stdout, stderr);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!process.HasExited) process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException) { }
+            process.Dispose();
+            throw;
+        }
 
         Console.ForegroundColor = process.ExitCode == 0 ? ConsoleColor.DarkGray : ConsoleColor.Red;
         Console.WriteLine($"[exit {process.ExitCode}]");
@@ -949,7 +1060,8 @@ internal static class AgentTerminalApp
           agent-terminal run --name hermes --wsl "uname -a && git status --short"
 
         Commands execute one at a time. Output is streamed both to the visible window and
-        back to the calling agent. Named-pipe access is restricted to the current user.
+        back to the calling agent. Type commands at the green human prompt; use :help for
+        prompt controls. Named-pipe access is restricted to the current user.
         """);
 
     private static void WriteResult(object value)
@@ -978,7 +1090,7 @@ internal static class AgentTerminalApp
     }
 
     private sealed record Request(string Action, string[]? Command = null, string? Cwd = null, string? Mode = null,
-        bool Background = false);
+        bool Background = false, string? Source = null);
     private sealed record Response(string Type, string? Data = null, int? ExitCode = null, string? Message = null,
         string? Profile = null, string? CondaEnv = null, string? Distro = null, string? JobId = null,
         string? Status = null, int? JobExitCode = null, DateTimeOffset? StartedAt = null,

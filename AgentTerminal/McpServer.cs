@@ -96,7 +96,7 @@ internal static class McpServer
                 version = typeof(McpServer).Assembly.GetName().Version?.ToString(3) ?? "0.0.0",
                 websiteUrl = "https://github.com/goyanx/agentterminal",
             },
-            instructions = "Controls trusted local AgentTerminal sessions. Commands execute as the current Windows user. Require user approval for consequential commands.",
+            instructions = "Controls trusted local AgentTerminal sessions shared with a line-oriented human prompt. Commands execute as the current Windows user. Ping before use, use supervised background jobs for long-running work, and require user approval for consequential commands.",
         };
     }
 
@@ -269,7 +269,7 @@ internal static class McpServer
         {
             name = "agent_terminal_open",
             title = "Open AgentTerminal Surface",
-            description = "Create a visible AgentTerminal window, tab, or split pane with a PowerShell, CMD, WSL, or Conda profile. Every live session name must be unique.",
+            description = "Create a visible, human-typable AgentTerminal window, tab, or split pane with a PowerShell, CMD, WSL, or Conda profile. Every live session name must be unique.",
             inputSchema = new
             {
                 type = "object",

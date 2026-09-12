@@ -31,6 +31,7 @@ instead of implementing another terminal emulator.
 - Built-in MCP stdio server for agent-independent tool discovery
 - Structured JSON output and provider-neutral function schemas
 - Supervised background jobs for servers, downloads, monitors, and trading dry-runs
+- A shared human command prompt in every visible controlled session
 
 ## What it does not provide
 
@@ -152,6 +153,29 @@ Profiles are intentionally stateless between submissions. Every command gets a c
 child process, reliable output boundaries, and an exact exit code. Use `--cwd`, a Conda
 environment, or an explicit command when state is needed; shell variables and `cd`
 changes do not carry into the next command.
+
+## Shared human and agent control
+
+Every visible session includes a green `human:<session>>` prompt. Type a command and
+press Enter to execute it through that session's PowerShell, CMD, WSL, or Conda profile.
+Agent-submitted and human-submitted commands use the same command boundary and are
+labelled `[agent]` or `[human]` in the visible transcript.
+
+```text
+:cd PATH             change the human prompt's working directory
+:background COMMAND start a supervised background job
+:status              show background-job status
+:logs                replay captured background-job output
+:stop-job            stop the supervised background job
+:exit                stop the AgentTerminal session
+:help                show prompt help
+```
+
+There is no persistent ownership lock. An agent can use the session after a typed
+foreground command finishes, or while a human-started background job runs. If a command
+must remain running while control is shared, start it with `:background`. This prompt is
+line-oriented; it does not provide interactive stdin to editors, password prompts,
+REPLs, or full-screen terminal applications.
 
 ## Long-running background jobs
 

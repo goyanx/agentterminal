@@ -91,6 +91,12 @@ AgentTerminal displays:
 
 The same output and exit code are returned to the calling agent. Read them normally and continue the task based on the result.
 
+Visible sessions also have a `human:<session>>` prompt. The user may submit commands
+through the session profile. Human and agent commands are serialized at command
+boundaries and labelled in the transcript. Do not assume exclusive ownership of a
+session. A foreground human command must finish before another foreground command can
+use that session; supervised background jobs leave the control channel responsive.
+
 ## Connect to an existing session
 
 Check whether the visible session is reachable before sending work.
