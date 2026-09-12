@@ -4,6 +4,8 @@ AgentTerminal is a small .NET 8 bridge between a coding agent and a **visible Wi
 
 It uses Windows Terminal instead of attempting to reimplement terminal rendering, tabs, fonts, selection, or window management. Control travels over a local named pipe restricted to the current Windows user.
 
+![AgentTerminal with named tabs and an independently controlled split pane](docs/agent-terminal-layout.png)
+
 ## Build and start
 
 ```powershell
