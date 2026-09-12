@@ -5,7 +5,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.4.0</Version>
+    <Version>0.4.1</Version>
     <Description>Visible Windows Terminal command execution for local AI coding agents.</Description>
     <RepositoryUrl>https://github.com/goyanx/agentterminal</RepositoryUrl>
   </PropertyGroup>

@@ -61,6 +61,11 @@ Direct `--`, `--shell`, `--cmd`, and `--wsl` remain available as explicit per-co
 overrides. Profile commands are stateless: do not assume `cd`, activated environments,
 aliases, or shell variables persist between submissions.
 
+A `conda` profile uses Conda installed on Windows. Do not create a `wsl` profile and
+then attempt to activate a Windows Conda environment inside it. WSL-hosted callers may
+pass `/mnt/c/...` or another `/mnt/<drive>/...` value as `cwd`; AgentTerminal converts
+that mount path to the corresponding local Windows path.
+
 ## Required behavior
 
 When the user asks to see terminal activity, route each relevant shell command through AgentTerminal instead of running it with a hidden/headless execution tool.

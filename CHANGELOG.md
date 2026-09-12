@@ -2,6 +2,17 @@
 
 All notable changes to AgentTerminal are documented in this file.
 
+## [0.4.1] - 2026-09-13
+
+### Fixed
+
+- Normalize essential Windows environment variables when the MCP server is launched
+  through WSL interoperability, preventing Conda failures such as `chcp` not found.
+- Translate `/mnt/<drive>/...` working directories supplied by WSL clients to local
+  Windows paths.
+- Reject unsupported UNC working directories for CMD and Conda with a clear error.
+- Use absolute paths for built-in Windows command hosts.
+
 ## [0.4.0] - 2026-09-12
 
 ### Added

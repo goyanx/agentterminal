@@ -65,6 +65,12 @@ mcp_servers:
 The MCP transport remains stdio. Actual terminal commands can use `direct`, `powershell`,
 or `wsl` mode independently of where the MCP client runs.
 
+WSL clients may supply a local mounted path such as `/mnt/c/src/project` as `cwd`;
+AgentTerminal converts it to `C:\src\project` before launching Windows commands. CMD and
+Conda profiles require a local Windows working directory and do not accept WSL UNC paths
+such as `\\wsl.localhost\Ubuntu\home\user`. AgentTerminal also restores the essential
+Windows process environment when launched through WSL interoperability.
+
 ## Function-tool adapters
 
 [`integrations/function-tools.json`](../integrations/function-tools.json) contains a

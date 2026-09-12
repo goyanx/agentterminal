@@ -132,6 +132,9 @@ Each visible session has one predictable execution profile. Commands submitted w
 | `wsl` | `wsl.exe` and Bash | Optional `--distro NAME` |
 | `conda` | PowerShell inside `conda run` | Optional `--conda-env NAME`, default `base` |
 
+The `conda` profile uses a Windows Conda installation. It is separate from a `wsl`
+profile and cannot activate a Windows Conda environment inside Linux.
+
 ```powershell
 & $at new-window --window work --name ps --profile powershell --cwd 'C:\src\app'
 & $at new-tab --window work --name dos --profile cmd --cwd 'C:\src\app'
@@ -367,6 +370,13 @@ Direct mode launches Windows executables even when the client is invoked from WS
 
 Interactive stdin is not supported. Cancel or close that session and use a noninteractive
 form of the command. Never place secrets directly in command-line arguments.
+
+### Conda reports `chcp` not found when called from WSL
+
+Use version 0.4.1 or newer. AgentTerminal normalizes the essential Windows process
+environment when its MCP server is launched through WSL. WSL clients may pass mounted
+working directories such as `/mnt/c/src/project`; they are converted to local Windows
+paths. CMD and Conda profiles cannot use `\\wsl.localhost\...` UNC directories.
 
 ## Development
 

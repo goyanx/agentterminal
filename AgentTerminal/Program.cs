@@ -32,6 +32,8 @@ internal static class AgentTerminalApp
 
     public static async Task<int> RunAsync(string[] args)
     {
+        NormalizeWindowsEnvironment();
+
         if (args.Length > 0 && args[0] == "--json")
         {
             JsonOutput = true;
@@ -67,8 +69,8 @@ internal static class AgentTerminalApp
         var options = ParseOptions(args);
         string name = ValidateName(options.Value("name") ?? DefaultName);
         string window = ValidateName(options.Value("window") ?? (kind == SurfaceKind.Window ? name : DefaultWindow));
-        string cwd = Path.GetFullPath(options.Value("cwd") ?? Environment.CurrentDirectory);
         string profile = ValidateProfile(options.Value("profile") ?? DefaultProfile);
+        string cwd = ResolveWorkingDirectory(options.Value("cwd"), profile);
         string? condaEnv = options.Value("conda-env");
         string? distro = options.Value("distro");
         ValidateProfileOptions(profile, condaEnv, distro);
@@ -166,8 +168,8 @@ internal static class AgentTerminalApp
         var options = ParseOptions(args);
         string name = ValidateName(options.Value("name") ?? DefaultName);
         string window = ValidateName(options.Value("window") ?? name);
-        string cwd = Path.GetFullPath(options.Value("cwd") ?? Environment.CurrentDirectory);
         string profile = ValidateProfile(options.Value("profile") ?? DefaultProfile);
+        string cwd = ResolveWorkingDirectory(options.Value("cwd"), profile);
         string? condaEnv = options.Value("conda-env");
         string? distro = options.Value("distro");
         ValidateProfileOptions(profile, condaEnv, distro);
@@ -243,7 +245,7 @@ internal static class AgentTerminalApp
             return;
         }
 
-        string cwd = Path.GetFullPath(request.Cwd ?? hostCwd);
+        string cwd = ResolveWorkingDirectory(request.Cwd ?? hostCwd, mode: request.Mode == "session" ? profile : request.Mode ?? "direct");
         if (!Directory.Exists(cwd))
         {
             await SendAsync(writer, new Response("error", Message: $"Working directory does not exist: {cwd}"), cancellationToken);
@@ -273,7 +275,7 @@ internal static class AgentTerminalApp
 
         if (mode == "wsl")
         {
-            startInfo.FileName = "wsl.exe";
+            startInfo.FileName = Path.Combine(Environment.SystemDirectory, "wsl.exe");
             if (distro is not null)
             {
                 startInfo.ArgumentList.Add("--distribution");
@@ -295,7 +297,7 @@ internal static class AgentTerminalApp
         }
         else if (mode == "cmd")
         {
-            startInfo.FileName = "cmd.exe";
+            startInfo.FileName = Path.Combine(Environment.SystemDirectory, "cmd.exe");
             startInfo.ArgumentList.Add("/d");
             startInfo.ArgumentList.Add("/s");
             startInfo.ArgumentList.Add("/c");
@@ -496,7 +498,7 @@ internal static class AgentTerminalApp
     private static string FindPowerShell() =>
         File.Exists(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe"))
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe")
-            : "powershell.exe";
+            : Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
 
     private static string FindConda()
     {
@@ -517,6 +519,59 @@ internal static class AgentTerminalApp
         }
 
         return "conda.exe";
+    }
+
+    private static void NormalizeWindowsEnvironment()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        string systemDirectory = Environment.SystemDirectory;
+        string windowsDirectory = Directory.GetParent(systemDirectory)?.FullName
+            ?? Path.Combine(Path.GetPathRoot(systemDirectory) ?? "C:\\", "Windows");
+        string[] requiredPathEntries =
+        [
+            systemDirectory,
+            windowsDirectory,
+            Path.Combine(systemDirectory, "Wbem"),
+            Path.Combine(systemDirectory, "WindowsPowerShell", "v1.0"),
+        ];
+
+        var pathEntries = (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        foreach (string entry in requiredPathEntries.Reverse())
+        {
+            if (!pathEntries.Contains(entry, StringComparer.OrdinalIgnoreCase))
+                pathEntries.Insert(0, entry);
+        }
+
+        Environment.SetEnvironmentVariable("PATH", string.Join(';', pathEntries));
+        Environment.SetEnvironmentVariable("SystemRoot", windowsDirectory);
+        Environment.SetEnvironmentVariable("windir", windowsDirectory);
+        Environment.SetEnvironmentVariable("ComSpec", Path.Combine(systemDirectory, "cmd.exe"));
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("PATHEXT")))
+            Environment.SetEnvironmentVariable("PATHEXT", ".COM;.EXE;.BAT;.CMD");
+    }
+
+    private static string ResolveWorkingDirectory(string? requested, string mode)
+    {
+        bool wasDefaulted = requested is null;
+        string value = requested ?? Environment.CurrentDirectory;
+        Match mountedPath = Regex.Match(value, "^/mnt/(?<drive>[A-Za-z])(?:/(?<rest>.*))?$");
+        if (mountedPath.Success)
+        {
+            string rest = mountedPath.Groups["rest"].Value.Replace('/', '\\');
+            value = $"{mountedPath.Groups["drive"].Value.ToUpperInvariant()}:\\{rest}";
+        }
+
+        string fullPath = Path.GetFullPath(value);
+        if (wasDefaulted && fullPath.StartsWith("\\\\", StringComparison.Ordinal) && mode != "wsl")
+            fullPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        if (fullPath.StartsWith("\\\\", StringComparison.Ordinal) && mode is "cmd" or "conda")
+            throw new ArgumentException($"The {mode} profile requires a local Windows working directory such as C:\\src; UNC paths are not supported.");
+
+        return fullPath;
     }
 
     private static string ValidateProfile(string profile)
