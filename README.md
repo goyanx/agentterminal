@@ -28,6 +28,8 @@ instead of implementing another terminal emulator.
 - Live output mirrored to both the visible terminal and calling agent
 - Original command exit codes returned to the caller
 - Local named-pipe transport restricted to the current Windows user
+- Built-in MCP stdio server for agent-independent tool discovery
+- Structured JSON output and provider-neutral function schemas
 
 ## What it does not provide
 
@@ -182,6 +184,9 @@ agent-terminal run [--name NAME] [--cwd PATH] --wsl "LINUX COMMAND"
 
 agent-terminal ping [--name NAME]
 agent-terminal stop [--name NAME]
+
+agent-terminal --json COMMAND [OPTIONS]
+agent-terminal mcp
 ```
 
 Aliases:
@@ -218,6 +223,26 @@ Suggested instruction:
 > was requested.
 
 See [AGENTS.md](AGENTS.md) for a complete instruction file designed for coding agents.
+
+## MCP and function-tool integration
+
+AgentTerminal includes a local MCP stdio server:
+
+```powershell
+AgentTerminal.exe mcp
+```
+
+It exposes `agent_terminal_open`, `agent_terminal_run`, `agent_terminal_ping`, and
+`agent_terminal_stop`. Clients without MCP support can use the provider-neutral
+[function-tool manifest](integrations/function-tools.json) together with structured CLI
+output:
+
+```powershell
+AgentTerminal.exe --json run --name shell -- dotnet --version
+```
+
+See [Agent integrations](docs/INTEGRATIONS.md) for MCP configuration, function-schema
+mapping, WSL/Hermes setup, and integration security requirements.
 
 ## Architecture
 
@@ -262,6 +287,9 @@ AgentTerminal is intended for trusted local use.
 When integrating with an autonomous agent, confirmation should be required for deletion,
 software installation, credential access, security changes, financial activity, and
 other consequential operations.
+
+See [SECURITY.md](SECURITY.md) for supported-version and private vulnerability-reporting
+information.
 
 ## Troubleshooting
 
@@ -316,6 +344,8 @@ Before submitting a change:
 AgentTerminal is an early-stage Windows utility. Its command-line interface and behavior
 may evolve while interactive input, session discovery, persistence, and stronger approval
 workflows are explored.
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 

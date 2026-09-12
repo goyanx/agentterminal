@@ -11,6 +11,10 @@ Executable locations:
 
 Default visible session name: `demo`
 
+Machine integrations may start the provider-neutral MCP stdio server with
+`AgentTerminal.exe mcp`, or prefix ordinary CLI commands with `--json` for one-document
+structured output. See `docs/INTEGRATIONS.md`. Do not scrape human-readable CLI output.
+
 ## Window and session model
 
 - A **window** is a named Windows Terminal window containing one or more tabs and panes.

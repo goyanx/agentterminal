@@ -18,7 +18,7 @@ catch (OperationCanceledException)
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"agent-terminal: {ex.Message}");
+    AgentTerminalApp.WriteFatalError(ex.Message);
     return 1;
 }
 
@@ -27,12 +27,22 @@ internal static class AgentTerminalApp
     private const string DefaultName = "main";
     private const string DefaultWindow = "main";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    internal static bool JsonOutput { get; private set; }
 
     public static async Task<int> RunAsync(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--json")
+        {
+            JsonOutput = true;
+            args = args[1..];
+        }
+
         if (args.Length == 0 || args[0] is "-h" or "--help" or "help")
         {
-            PrintHelp();
+            if (JsonOutput)
+                WriteJson(new { ok = true, command = "help", commands = new[] { "new-window", "new-tab", "split-pane", "run", "ping", "stop", "mcp" } });
+            else
+                PrintHelp();
             return 0;
         }
 
@@ -43,6 +53,7 @@ internal static class AgentTerminalApp
             "new-tab" or "tab" => await OpenSurfaceAsync(args[1..], SurfaceKind.Tab),
             "split-pane" or "split" => await OpenSurfaceAsync(args[1..], SurfaceKind.Pane),
             "host" => await HostAsync(args[1..]),
+            "mcp" => await McpServer.RunAsync(),
             "run" => await RunCommandAsync(args[1..]),
             "ping" => await SimpleRequestAsync(args[1..], "ping"),
             "stop" => await SimpleRequestAsync(args[1..], "stop"),
@@ -63,7 +74,7 @@ internal static class AgentTerminalApp
 
         if (await CanConnectAsync(name, 150))
         {
-            Console.WriteLine($"Agent terminal '{name}' is already running.");
+            WriteResult(new { ok = true, action = "open", session = name, window, alreadyRunning = true });
             return 0;
         }
 
@@ -123,7 +134,7 @@ internal static class AgentTerminalApp
                     SurfaceKind.Tab => "tab",
                     _ => "pane",
                 };
-                Console.WriteLine($"Opened visible {surface} session '{name}' in window '{window}'.");
+                WriteResult(new { ok = true, action = "open", surface, session = name, window, cwd });
                 return 0;
             }
             await Task.Delay(100);
@@ -305,18 +316,20 @@ internal static class AgentTerminalApp
         var parsed = ParseRun(args);
         string name = ValidateName(parsed.Name ?? DefaultName);
         var request = new Request("run", parsed.Command, parsed.Cwd, parsed.Shell, parsed.Wsl);
-        return await SendRequestAsync(name, request, echoOutput: true);
+        return await SendRequestAsync(name, request, echoOutput: !JsonOutput);
     }
 
     private static async Task<int> SimpleRequestAsync(string[] args, string action)
     {
         var options = ParseOptions(args);
         string name = ValidateName(options.Value("name") ?? DefaultName);
-        return await SendRequestAsync(name, new Request(action), echoOutput: action != "ping");
+        return await SendRequestAsync(name, new Request(action), echoOutput: !JsonOutput && action != "ping");
     }
 
     private static async Task<int> SendRequestAsync(string name, Request request, bool echoOutput)
     {
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
         await using var pipe = new NamedPipeClientStream(".", PipeName(name), PipeDirection.InOut,
             PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         try
@@ -341,16 +354,35 @@ internal static class AgentTerminalApp
                 case "stdout" when echoOutput:
                     Console.Out.Write(response.Data);
                     break;
+                case "stdout":
+                    stdout.Append(response.Data);
+                    break;
                 case "stderr" when echoOutput:
                     Console.Error.Write(response.Data);
                     break;
+                case "stderr":
+                    stderr.Append(response.Data);
+                    break;
                 case "pong":
-                    Console.WriteLine($"Agent terminal '{response.Message}' is reachable.");
+                    WriteResult(new { ok = true, action = "ping", session = response.Message, reachable = true });
                     return 0;
                 case "result":
+                    if (JsonOutput)
+                        WriteJson(new
+                        {
+                            ok = (response.ExitCode ?? 0) == 0,
+                            action = request.Action,
+                            session = name,
+                            exitCode = response.ExitCode ?? 0,
+                            stdout = stdout.ToString(),
+                            stderr = stderr.ToString(),
+                        });
                     return response.ExitCode ?? 0;
                 case "error":
-                    Console.Error.WriteLine(response.Message);
+                    if (JsonOutput)
+                        WriteJson(new { ok = false, action = request.Action, session = name, error = response.Message });
+                    else
+                        Console.Error.WriteLine(response.Message);
                     return 1;
             }
         }
@@ -404,7 +436,7 @@ internal static class AgentTerminalApp
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe")
             : "powershell.exe";
 
-    private static IReadOnlyList<string> CurrentLaunchCommand()
+    internal static IReadOnlyList<string> CurrentLaunchCommand()
     {
         string processPath = Environment.ProcessPath ?? throw new InvalidOperationException("Cannot determine current executable path.");
         if (Path.GetFileNameWithoutExtension(processPath).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
@@ -489,6 +521,8 @@ internal static class AgentTerminalApp
         AgentTerminal — run agent commands in a Windows Terminal window you can watch
 
         Usage:
+          agent-terminal --json COMMAND [OPTIONS]
+          agent-terminal mcp
           agent-terminal start      [--window WINDOW] [--name NAME] [--cwd PATH] [--title TITLE] [--maximized]
           agent-terminal new-window [--window WINDOW] [--name NAME] [--cwd PATH] [--title TITLE] [--maximized]
           agent-terminal new-tab    [--window WINDOW] --name NAME [--cwd PATH] [--title TITLE]
@@ -511,6 +545,31 @@ internal static class AgentTerminalApp
         Commands execute one at a time. Output is streamed both to the visible window and
         back to the calling agent. Named-pipe access is restricted to the current user.
         """);
+
+    private static void WriteResult(object value)
+    {
+        if (JsonOutput) WriteJson(value);
+        else
+        {
+            JsonElement element = JsonSerializer.SerializeToElement(value, JsonOptions);
+            string action = element.TryGetProperty("action", out var actionNode) ? actionNode.GetString() ?? "" : "";
+            if (action == "ping")
+                Console.WriteLine($"Agent terminal '{element.GetProperty("session").GetString()}' is reachable.");
+            else if (element.TryGetProperty("alreadyRunning", out _))
+                Console.WriteLine($"Agent terminal '{element.GetProperty("session").GetString()}' is already running.");
+            else if (action == "open")
+                Console.WriteLine($"Opened visible {element.GetProperty("surface").GetString()} session '{element.GetProperty("session").GetString()}' in window '{element.GetProperty("window").GetString()}'.");
+        }
+    }
+
+    private static void WriteJson(object value) =>
+        Console.Out.WriteLine(JsonSerializer.Serialize(value, JsonOptions));
+
+    internal static void WriteFatalError(string message)
+    {
+        if (JsonOutput) WriteJson(new { ok = false, error = message });
+        else Console.Error.WriteLine($"agent-terminal: {message}");
+    }
 
     private sealed record Request(string Action, string[]? Command = null, string? Cwd = null, bool Shell = false, bool Wsl = false);
     private sealed record Response(string Type, string? Data = null, int? ExitCode = null, string? Message = null);

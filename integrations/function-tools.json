@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "1.0",
+  "description": "Provider-neutral function tool definitions for AgentTerminal 0.3.x.",
+  "tools": [
+    {
+      "name": "agent_terminal_open",
+      "description": "Create a visible AgentTerminal window, tab, or split pane. Every live session name must be unique.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["new_window", "new_tab", "split_pane"]
+          },
+          "session": {
+            "type": "string",
+            "description": "Unique session name used by later run, ping, and stop calls."
+          },
+          "window": {
+            "type": "string",
+            "description": "Named Windows Terminal window group."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Existing Windows working-directory path."
+          },
+          "title": {
+            "type": "string",
+            "description": "Optional visible tab title."
+          },
+          "orientation": {
+            "type": "string",
+            "enum": ["horizontal", "vertical"]
+          },
+          "size": {
+            "type": "number",
+            "exclusiveMinimum": 0.05,
+            "exclusiveMaximum": 0.95
+          },
+          "maximized": {
+            "type": "boolean"
+          }
+        },
+        "required": ["action", "session"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "agent_terminal_run",
+      "description": "Run a command in a named visible AgentTerminal session. This can perform arbitrary actions as the current user; obtain approval when consequential.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["direct", "powershell", "wsl"]
+          },
+          "program": {
+            "type": "string",
+            "description": "Executable for direct mode."
+          },
+          "arguments": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Argument list for direct mode."
+          },
+          "command": {
+            "type": "string",
+            "description": "One command string for powershell or wsl mode."
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Optional existing Windows working-directory path."
+          }
+        },
+        "required": ["session", "mode"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "agent_terminal_ping",
+      "description": "Check whether a named AgentTerminal session is reachable.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": { "type": "string" }
+        },
+        "required": ["session"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "agent_terminal_stop",
+      "description": "Stop one named AgentTerminal session without stopping other tabs or panes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "session": { "type": "string" }
+        },
+        "required": ["session"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
